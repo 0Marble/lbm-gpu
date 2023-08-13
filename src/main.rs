@@ -21,146 +21,10 @@ macro_rules! gl_call {
     }};
 }
 
-const ROTATE_HUE_SHADER_SRC: &[u8] = br#"
-#version 460 core
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
-layout(rgba32f, binding = 0) uniform image2D screen;
-
-vec4 to_hsv(vec4 rgb) {
-    float r = rgb.r;
-    float g = rgb.g;
-    float b = rgb.b;
-    float a = rgb.a;
-
-    float cmax = max(r, max(g, b));
-    float cmin = min(r, min(g, b));
-    float delta = cmax - cmin;
-
-    float h = 0.0;
-    float s = 0.0;
-    float v = 0.0;
-
-    if (delta == 0.0) {
-        h = 0.0;
-    } else if (cmax == r) {
-        h = 60.0 * mod((g - b) / delta, 6.0);
-    } else if (cmax == g) {
-        h = 60.0 * ((b - r) / delta + 2.0);
-    } else {
-        h = 60.0 * ((r - g) / delta + 4.0);
-    }
-
-    if (cmax == 0.0) {
-        s = 0.0;
-    } else {
-        s = delta / cmax;
-    }
-
-    v = cmax;
-
-    return vec4(h,s,v,a);
-}
-
-vec4 from_hsv(vec4 hsv) {
-    float h = hsv.r;
-    float s = hsv.g;
-    float v = hsv.b;
-    float a = hsv.a;
-
-    float c = v * s;
-    float x = c * (1.0 - abs(mod(h / 60.0,2.0) - 1.0));
-    float m = v - c;
-
-    float r = 0.0;
-    float g = 0.0;
-    float b = 0.0;
-
-    if (h >= 0 && h < 60.0) {
-        r = c; g = x; b = 0.0;
-    } else if (h >= 60.0 && h < 120.0) {
-        r = x; g = c; b = 0.0;
-    } else if (h >= 120.0 && h < 180.0) {
-        r = 0.0; g = c; b = x;
-    } else if (h >= 180.0 && h < 240.0) {
-        r = 0.0; g = x; b = c;
-    } else if (h >= 240.0 && h < 300.0) {
-        r = x; g = 0.0; b = c;
-    } else if (h >= 300.0 && h < 360.0) {
-        r = c; g = 0.0; b = x;
-    }
-
-    return vec4(r + m, g + m, b + m, a);
-}
-
-void main()
-{
-	ivec2 pixel_coords = ivec2(gl_GlobalInvocationID.xy);
-    vec4 start_color = imageLoad(screen, pixel_coords);
-    vec4 hsv = to_hsv(start_color);
-    hsv.r = mod(hsv.r + 1.0, 360.0);
-    vec4 end_color = from_hsv(hsv);
-
-    imageStore(screen, pixel_coords, end_color);
-}
-"#;
-
-const GEN_IMAGE_SHADER_SRC: &[u8] = br#"
-#version 460 core
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
-layout(rgba32f, binding = 0) uniform image2D screen;
-void main()
-{
-	vec4 pixel = vec4(0.075, 0.133, 0.173, 1.0);
-	ivec2 pixel_coords = ivec2(gl_GlobalInvocationID.xy);
-	
-	ivec2 dims = imageSize(screen);
-	float x = -(float(pixel_coords.x * 2 - dims.x) / dims.x); // transforms to [-1.0, 1.0]
-	float y = -(float(pixel_coords.y * 2 - dims.y) / dims.y); // transforms to [-1.0, 1.0]
-
-	float fov = 90.0;
-	vec3 cam_o = vec3(0.0, 0.0, -tan(fov / 2.0));
-	vec3 ray_o = vec3(x, y, 0.0);
-	vec3 ray_d = normalize(ray_o - cam_o);
-
-	vec3 sphere_c = vec3(0.0, 0.0, -5.0);
-	float sphere_r = 1.0;
-
-	vec3 o_c = ray_o - sphere_c;
-	float b = dot(ray_d, o_c);
-	float c = dot(o_c, o_c) - sphere_r * sphere_r;
-	float intersectionState = b * b - c;
-	vec3 intersection = ray_o + ray_d * (-b + sqrt(b * b - c));
-
-	if (intersectionState >= 0.0)
-	{
-		pixel = vec4((normalize(intersection - sphere_c) + 1.0) / 2.0, 1.0);
-	}
-
-	imageStore(screen, pixel_coords, pixel);
-}"#;
-
-const VERTEX_SHADER_SRC: &[u8] = br#"
-#version 460 core
-layout (location = 0) in vec2 pos;
-layout (location = 1) in vec2 uvs;
-out vec2 UVs;
-void main()
-{
-	gl_Position = vec4(pos.x, pos.y, 0.0, 1.0);
-	UVs = uvs;
-}
-"#;
-
-const FRAGMENT_SHADER_SOURCE: &[u8] = br#"
-#version 460 core
-out vec4 FragColor;
-uniform sampler2D screen;
-in vec2 UVs;
-void main()
-{
-	FragColor = texture(screen, UVs);
-}
-"#;
+const LBM_STEP_SRC: &[u8] = include_bytes!("../shaders/lbm_step.glsl");
+const LBM_INIT_SRC: &[u8] = include_bytes!("../shaders/lbm_init.glsl");
+const VERTEX_SHADER_SRC: &[u8] = include_bytes!("../shaders/vertex.glsl");
+const FRAGMENT_SHADER_SRC: &[u8] = include_bytes!("../shaders/fragment.glsl");
 
 const VERTICES: [(f32, f32, f32, f32); 6] = [
     (-1.0, -1.0, 0.0, 0.0),
@@ -229,16 +93,60 @@ fn compile_program(shaders: &[gl::types::GLuint]) -> Result<gl::types::GLuint, S
             buffer.as_mut_ptr() as *mut gl::types::GLchar
         ));
 
-        return Err(std::str::from_utf8(&buffer[..]).unwrap().to_string());
+        return Err(std::str::from_utf8(&buffer).unwrap().to_string());
     }
 
     Ok(p)
 }
 
+fn make_2d_texture(
+    width: i32,
+    height: i32,
+    pos: gl::types::GLuint,
+    storage: gl::types::GLenum,
+) -> gl::types::GLuint {
+    let mut texture = 0;
+    gl_call!(gl::CreateTextures(gl::TEXTURE_2D, 1, &mut texture));
+    gl_call!(gl::TextureStorage2D(texture, 1, storage, width, height));
+    gl_call!(gl::BindImageTexture(
+        pos,
+        texture,
+        0,
+        gl::FALSE,
+        0,
+        gl::READ_WRITE,
+        storage
+    ));
+
+    texture
+}
+
+fn make_3d_texture(
+    width: i32,
+    height: i32,
+    pos: gl::types::GLuint,
+    storage: gl::types::GLenum,
+) -> gl::types::GLuint {
+    let mut texture = 0;
+    gl_call!(gl::CreateTextures(gl::TEXTURE_2D_ARRAY, 1, &mut texture));
+    // gl_call!(gl::TextureStorage2D(texture, 1, storage, width, height));
+    gl_call!(gl::TextureStorage3D(texture, 1, storage, width, height, 3));
+    gl_call!(gl::BindImageTexture(
+        pos,
+        texture,
+        0,
+        gl::TRUE,
+        0,
+        gl::READ_WRITE,
+        storage
+    ));
+
+    texture
+}
+
 fn main() {
-    let title = "LBM";
-    let width = 800;
-    let height = 800;
+    let width = 8 * 8 * 20;
+    let height = 8 * 8 * 10;
 
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
@@ -251,7 +159,7 @@ fn main() {
     gl_attributes.set_context_version(4, 6);
 
     let window = video_subsystem
-        .window(title, width, height)
+        .window("LBM", width as u32, height as u32)
         .opengl()
         .resizable()
         .build()
@@ -271,52 +179,20 @@ fn main() {
     gl_call!(gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA));
 
     let vertex_shader = compile_shader(VERTEX_SHADER_SRC, gl::VERTEX_SHADER).unwrap();
-    let fragment_shader = compile_shader(FRAGMENT_SHADER_SOURCE, gl::FRAGMENT_SHADER).unwrap();
+    let fragment_shader = compile_shader(FRAGMENT_SHADER_SRC, gl::FRAGMENT_SHADER).unwrap();
     let draw_program = compile_program(&[vertex_shader, fragment_shader]).unwrap();
-    let gen_image_shader = compile_shader(GEN_IMAGE_SHADER_SRC, gl::COMPUTE_SHADER).unwrap();
-    let gen_image_program = compile_program(&[gen_image_shader]).unwrap();
-    let rotate_hue_shader = compile_shader(ROTATE_HUE_SHADER_SRC, gl::COMPUTE_SHADER).unwrap();
-    let rotate_hue_program = compile_program(&[rotate_hue_shader]).unwrap();
 
-    let mut texture = 0;
-    gl_call!(gl::CreateTextures(gl::TEXTURE_2D, 1, &mut texture));
-    gl_call!(gl::TextureParameteri(
-        texture,
-        gl::TEXTURE_MIN_FILTER,
-        gl::NEAREST as i32
-    ));
+    let lbm_init_shader = compile_shader(LBM_INIT_SRC, gl::COMPUTE_SHADER).unwrap();
+    let lbm_init_program = compile_program(&[lbm_init_shader]).unwrap();
+    let lbm_step_shader = compile_shader(LBM_STEP_SRC, gl::COMPUTE_SHADER).unwrap();
+    let lbm_step_program = compile_program(&[lbm_step_shader]).unwrap();
 
-    gl_call!(gl::TextureParameteri(
-        texture,
-        gl::TEXTURE_MAG_FILTER,
-        gl::NEAREST as i32
-    ));
-    gl_call!(gl::TextureParameteri(
-        texture,
-        gl::TEXTURE_WRAP_S,
-        gl::CLAMP_TO_EDGE as i32
-    ));
-    gl_call!(gl::TextureParameteri(
-        texture,
-        gl::TEXTURE_WRAP_T,
-        gl::CLAMP_TO_EDGE as i32
-    ));
-    gl_call!(gl::TextureStorage2D(
-        texture,
-        1,
-        gl::RGBA32F,
-        width as i32,
-        height as i32
-    ));
-    gl_call!(gl::BindImageTexture(
-        0,
-        texture,
-        0,
-        gl::FALSE,
-        0,
-        gl::READ_WRITE,
-        gl::RGBA32F
-    ));
+    let screen_texture = make_2d_texture(width, height, 0, gl::RGBA32F);
+    let fin_texture = make_3d_texture(width, height, 1, gl::RGBA32F);
+    let fout_texture = make_3d_texture(width, height, 2, gl::RGBA32F);
+    let vel_texure = make_2d_texture(width, height, 3, gl::RG32F);
+    let initial_vel_texure = make_2d_texture(width, height, 4, gl::RG32F);
+    let obstacle_texture = make_2d_texture(width, height, 5, gl::R8UI);
 
     let (mut vao, mut vbo) = (0, 0);
     gl_call!(gl::GenVertexArrays(1, &mut vao));
@@ -348,16 +224,33 @@ fn main() {
         gl::STATIC_DRAW
     ));
 
-    let texture_uniform = gl_call!(gl::GetUniformLocation(
+    gl_call!(gl::UseProgram(draw_program));
+    let screen_uniform = gl_call!(gl::GetUniformLocation(
         draw_program,
         b"screen".as_ptr() as *const i8
     ));
+    gl_call!(gl::BindTextureUnit(0, screen_texture));
+    gl_call!(gl::Uniform1i(screen_uniform, 0));
 
-    gl_call!(gl::UseProgram(gen_image_program));
-    gl_call!(gl::DispatchCompute(width / 8, width / 8, 1));
+    gl_call!(gl::UseProgram(lbm_init_program));
+    gl_call!(gl::BindTextureUnit(0, screen_texture));
+    gl_call!(gl::BindTextureUnit(1, fin_texture));
+    gl_call!(gl::BindTextureUnit(2, fout_texture));
+    gl_call!(gl::BindTextureUnit(3, vel_texure));
+    gl_call!(gl::BindTextureUnit(4, initial_vel_texure));
+    gl_call!(gl::BindTextureUnit(5, obstacle_texture));
+    gl_call!(gl::DispatchCompute(width as u32 / 8, height as u32 / 8, 1));
     gl_call!(gl::MemoryBarrier(gl::ALL_BARRIER_BITS));
 
-    'running: loop {
+    gl_call!(gl::UseProgram(lbm_step_program));
+    gl_call!(gl::BindTextureUnit(0, screen_texture));
+    gl_call!(gl::BindTextureUnit(1, fin_texture));
+    gl_call!(gl::BindTextureUnit(2, fout_texture));
+    gl_call!(gl::BindTextureUnit(3, vel_texure));
+    gl_call!(gl::BindTextureUnit(4, initial_vel_texure));
+    gl_call!(gl::BindTextureUnit(5, obstacle_texture));
+
+    'running: for _ in 0.. {
         for e in event_pump.poll_iter() {
             match e {
                 Event::Quit { .. } => break 'running,
@@ -367,6 +260,9 @@ fn main() {
                 }
                 Event::KeyDown { keycode, .. } if keycode == Some(Keycode::Return) => {
                     //
+                    gl_call!(gl::UseProgram(lbm_step_program));
+                    gl_call!(gl::DispatchCompute(width as u32 / 8, height as u32 / 8, 1));
+                    gl_call!(gl::MemoryBarrier(gl::ALL_BARRIER_BITS));
                 }
                 Event::KeyDown { keycode, .. } if keycode == Some(Keycode::Tab) => {
                     //
@@ -378,22 +274,22 @@ fn main() {
         gl_call!(gl::Clear(gl::COLOR_BUFFER_BIT));
 
         gl_call!(gl::UseProgram(draw_program));
-        gl_call!(gl::BindTextureUnit(0, texture));
-        gl_call!(gl::Uniform1i(texture_uniform, 0));
         gl_call!(gl::BindVertexArray(vao));
         gl_call!(gl::DrawArrays(gl::TRIANGLES, 0, VERTICES.len() as i32));
-
-        gl_call!(gl::UseProgram(rotate_hue_program));
-        gl_call!(gl::DispatchCompute(width / 8, width / 8, 1));
-        gl_call!(gl::MemoryBarrier(gl::ALL_BARRIER_BITS));
 
         window.gl_swap_window();
     }
 
-    gl_call!(gl::DeleteTextures(1, &texture));
+    gl_call!(gl::DeleteTextures(1, &fin_texture));
+    gl_call!(gl::DeleteTextures(1, &fout_texture));
+    gl_call!(gl::DeleteTextures(1, &vel_texure));
+    gl_call!(gl::DeleteTextures(1, &initial_vel_texure));
+    gl_call!(gl::DeleteTextures(1, &obstacle_texture));
+    gl_call!(gl::DeleteTextures(1, &screen_texture));
+
     gl_call!(gl::DeleteBuffers(1, &vbo));
     gl_call!(gl::DeleteVertexArrays(1, &vao));
     gl_call!(gl::DeleteProgram(draw_program));
-    gl_call!(gl::DeleteProgram(gen_image_program));
-    gl_call!(gl::DeleteProgram(rotate_hue_program));
+    gl_call!(gl::DeleteProgram(lbm_init_program));
+    gl_call!(gl::DeleteProgram(lbm_step_program));
 }
