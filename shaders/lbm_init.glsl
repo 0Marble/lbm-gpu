@@ -54,7 +54,7 @@ void main() {
     int row = int(gl_GlobalInvocationID.y);
     ivec3 size = imageSize(Fin);
     
-    float reynolds_number = 20.0;
+    float reynolds_number = REYNOLDS_NUMBER;
     float ulb = 0.04;
     float r = float(size.y / 9);
     float omega = 1.0 / (3.0 * ulb * r / reynolds_number + 0.5);
@@ -71,7 +71,7 @@ void main() {
     float fin[9];
     for (int i = 0; i < 9; i++) {
         float d = dot(DIRS[i], vel);
-        fin[i] = T_WEIGHTS[i] * (1.0 + d * 3.0 + 4.5 * d * d - 1.5 * vel_len * vel_len);
+        fin[i] = T_WEIGHTS[i] * (1.0 + d * 3.0 + 4.5 * d * d + 1.5 * vel_len * vel_len);
     }
     imageStore(Fin, ivec3(clm, row, 0), vec4(fin[0], fin[1], fin[2], 0.0));
     imageStore(Fin, ivec3(clm, row, 1), vec4(fin[3], fin[4], fin[5], 0.0));

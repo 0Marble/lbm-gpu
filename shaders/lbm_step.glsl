@@ -128,7 +128,7 @@ void main() {
     int row = int(gl_GlobalInvocationID.y);
     ivec3 size = imageSize(Fin);
 
-    float reynolds_number = 1000.0;
+    float reynolds_number = REYNOLDS_NUMBER;
     float ulb = 0.04;
     float r = float(size.y / 9);
     float omega = 1.0 / (3.0 * ulb * r / reynolds_number + 0.5);

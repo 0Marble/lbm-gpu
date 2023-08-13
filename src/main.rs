@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use sdl2::{event::Event, keyboard::Keycode};
 
 macro_rules! gl_call {
@@ -129,7 +131,6 @@ fn make_3d_texture(
 ) -> gl::types::GLuint {
     let mut texture = 0;
     gl_call!(gl::CreateTextures(gl::TEXTURE_2D_ARRAY, 1, &mut texture));
-    // gl_call!(gl::TextureStorage2D(texture, 1, storage, width, height));
     gl_call!(gl::TextureStorage3D(texture, 1, storage, width, height, 3));
     gl_call!(gl::BindImageTexture(
         pos,
@@ -182,9 +183,24 @@ fn main() {
     let fragment_shader = compile_shader(FRAGMENT_SHADER_SRC, gl::FRAGMENT_SHADER).unwrap();
     let draw_program = compile_program(&[vertex_shader, fragment_shader]).unwrap();
 
-    let lbm_init_shader = compile_shader(LBM_INIT_SRC, gl::COMPUTE_SHADER).unwrap();
+    let reynolds_number = 200.0;
+    let lbm_init_shader = compile_shader(
+        std::str::from_utf8(LBM_INIT_SRC)
+            .unwrap()
+            .replace("REYNOLDS_NUMBER", &reynolds_number.to_string())
+            .as_bytes(),
+        gl::COMPUTE_SHADER,
+    )
+    .unwrap();
     let lbm_init_program = compile_program(&[lbm_init_shader]).unwrap();
-    let lbm_step_shader = compile_shader(LBM_STEP_SRC, gl::COMPUTE_SHADER).unwrap();
+    let lbm_step_shader = compile_shader(
+        std::str::from_utf8(LBM_STEP_SRC)
+            .unwrap()
+            .replace("REYNOLDS_NUMBER", &reynolds_number.to_string())
+            .as_bytes(),
+        gl::COMPUTE_SHADER,
+    )
+    .unwrap();
     let lbm_step_program = compile_program(&[lbm_step_shader]).unwrap();
 
     let screen_texture = make_2d_texture(width, height, 0, gl::RGBA32F);
@@ -233,25 +249,13 @@ fn main() {
     gl_call!(gl::Uniform1i(screen_uniform, 0));
 
     gl_call!(gl::UseProgram(lbm_init_program));
-    // gl_call!(gl::BindTextureUnit(0, screen_texture));
-    // gl_call!(gl::BindTextureUnit(1, fin_texture));
-    // gl_call!(gl::BindTextureUnit(2, fout_texture));
-    // gl_call!(gl::BindTextureUnit(3, vel_texure));
-    // gl_call!(gl::BindTextureUnit(4, initial_vel_texure));
-    // gl_call!(gl::BindTextureUnit(5, obstacle_texture));
     gl_call!(gl::DispatchCompute(width as u32 / 8, height as u32 / 8, 1));
     gl_call!(gl::MemoryBarrier(gl::ALL_BARRIER_BITS));
 
-    // gl_call!(gl::UseProgram(lbm_step_program));
-    // gl_call!(gl::BindTextureUnit(0, screen_texture));
-    // gl_call!(gl::BindTextureUnit(1, fin_texture));
-    // gl_call!(gl::BindTextureUnit(2, fout_texture));
-    // gl_call!(gl::BindTextureUnit(3, vel_texure));
-    // gl_call!(gl::BindTextureUnit(4, initial_vel_texure));
-    // gl_call!(gl::BindTextureUnit(5, obstacle_texture));
-
     let mut step = 0usize;
-    'running: for _ in 0.. {
+    let mut fps_start = Instant::now();
+
+    'running: for frame_num in 0.. {
         for e in event_pump.poll_iter() {
             match e {
                 Event::Quit { .. } => break 'running,
@@ -271,7 +275,7 @@ fn main() {
 
         gl_call!(gl::Clear(gl::COLOR_BUFFER_BIT));
 
-        for _ in 0..10 {
+        for _ in 0..20 {
             gl_call!(gl::UseProgram(lbm_step_program));
             if step % 2 == 0 {
                 gl_call!(gl::BindImageTexture(
@@ -324,6 +328,12 @@ fn main() {
         gl_call!(gl::DrawArrays(gl::TRIANGLES, 0, VERTICES.len() as i32));
 
         window.gl_swap_window();
+
+        if frame_num % 100 == 0 {
+            let fps = 100.0 / fps_start.elapsed().as_secs_f64();
+            fps_start = Instant::now();
+            println!("fps={}", fps);
+        }
     }
 
     gl_call!(gl::DeleteTextures(1, &fin_texture));
