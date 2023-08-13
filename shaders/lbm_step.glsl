@@ -2,9 +2,9 @@
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in; 
 
 layout(rgba32f, binding = 0) uniform writeonly image2D Screen;
-layout(rgba32f, binding = 1) uniform image2DArray Fin;
-layout(rgba32f, binding = 2) uniform image2DArray Fout;
-layout(rg32f, binding = 3) uniform image2D Vel;
+layout(rgba32f, binding = 1) uniform readonly image2DArray Fin;
+layout(rgba32f, binding = 2) uniform writeonly image2DArray Fout;
+layout(rg32f, binding = 3) uniform writeonly image2D Vel;
 layout(rg32f, binding = 4) uniform readonly image2D Initial_vel;
 layout(r8ui, binding = 5) uniform readonly uimage2D Obstacle;
 
@@ -57,6 +57,72 @@ vec4 from_hsv(vec4 hsv) {
     return vec4(r + m, g + m, b + m, a);
 }
 
+float fin[9];
+
+void fill_fin(int clm, int row, int width, int height) {
+    if (clm != 0 && clm + 1 != width) {
+        for (int i = 0; i < 9; i++) {
+            ivec2 from = ivec2(clm, row) - DISCRETE_DIRS[i];
+            if (from.y == -1) {
+                from.y = height - 1;
+            } else if (from.y == height) {
+                from.y = 0;
+            }
+
+            fin[i] = imageLoad(Fin, ivec3(from.x, from.y, i / 3))[i % 3];
+        }
+    } else if (clm + 1 == width) {
+        // fin[x,y][0..6] normally:
+        for (int i = 0; i < 6; i++) {
+            ivec2 from = ivec2(clm, row) - DISCRETE_DIRS[i];
+            if (from.y == -1) {
+                from.y = height - 1;
+            } else if (from.y == height) {
+                from.y = 0;
+            }
+
+            fin[i] = imageLoad(Fin, ivec3(from.x, from.y, i / 3))[i % 3];
+        }
+
+        // fin[x,y][6..9] = fin[x-1,y][6..9]:
+        for (int i = 6; i < 9; i++) {
+            ivec2 from = ivec2(clm - 1, row) - DISCRETE_DIRS[i];
+            if (from.y == -1) {
+                from.y = height - 1;
+            } else if (from.y == height) {
+                from.y = 0;
+            }
+
+            fin[i] = imageLoad(Fin, ivec3(from.x, from.y, i / 3))[i % 3];
+        }
+    } else if (clm == 0) {
+        // fin[x,y][3..9] normally:
+        for (int i = 3; i < 9; i++) {
+            ivec2 from = ivec2(clm, row) - DISCRETE_DIRS[i];
+            if (from.y == -1) {
+                from.y = height - 1;
+            } else if (from.y == height) {
+                from.y = 0;
+            }
+
+            fin[i] = imageLoad(Fin, ivec3(from.x, from.y, i / 3))[i % 3];
+        }
+        // fin[x,y][0,1,2] = equilibrium[0,1,2] + fin[x,y][8,7,6] - equilibrium[8,7,6]:
+        vec2 velocity = imageLoad(Initial_vel, ivec2(clm, row)).xy;
+        float density = (fin[3] + fin[4] + fin[5] + 2.0 * (fin[6] + fin[7] + fin[8])) / (1.0 - velocity.x);
+        float vel_len = length(velocity);
+        float equilibrium[9];
+
+        for (int i = 0; i < 9; i++) {
+            float d = dot(DIRS[i], velocity);
+            equilibrium[i] = density * T_WEIGHTS[i] * (1.0 + d * 3.0 + 4.5 * d * d - 1.5 * vel_len * vel_len);
+        }
+        for (int i = 0; i < 3; i++) {
+            fin[i] = equilibrium[i] + fin[8 - i] - equilibrium[8 - i];
+        }
+    }
+} 
+
 void main() {
     int clm = int(gl_GlobalInvocationID.x);
     int row = int(gl_GlobalInvocationID.y);
@@ -67,42 +133,16 @@ void main() {
     float r = float(size.y / 9);
     float omega = 1.0 / (3.0 * ulb * r / reynolds_number + 0.5);
 
-
-    float fin[9];
-    if (clm + 1 == size.x) {
-    // outflow from the right
-        for (int i = 0; i < 2; i++) {
-            vec3 f = imageLoad(Fin, ivec3(clm, row, i)).xyz;
-            for (int j = 0; j < 3; j++) {
-                fin[i * 3 + j] = f[j];
-            }
-        }
-        vec4 from = imageLoad(Fin, ivec3(clm - 1, row, 2));
-        fin[6] = from.x;
-        fin[7] = from.y;
-        fin[8] = from.z;
-    } else {    
-        for (int i = 0; i < 3; i++) {
-            vec3 f = imageLoad(Fin, ivec3(clm, row, i)).xyz;
-            for (int j = 0; j < 3; j++) {
-                fin[i * 3 + j] = f[j];
-            }
-        }
-    }
+    fill_fin(clm, row, size.x, size.y);
 
     // density and velocity
     float density = 0.0;
     vec2 velocity = vec2(0.0, 0.0);
-    if (clm != 0) {
-        for (int i = 0; i < 9; i++) {
-            density += fin[i];
-            velocity += fin[i] * DIRS[i];
-        }
-        velocity /= density;
-    } else {
-        velocity = imageLoad(Initial_vel, ivec2(clm, row)).xy;
-        density = (fin[3] + fin[4] + fin[5] + 2.0 * (fin[6] + fin[7] + fin[8])) / (1.0 - velocity.x);
+    for (int i = 0; i < 9; i++) {
+        density += fin[i];
+        velocity += fin[i] * DIRS[i];
     }
+    velocity /= density;
     
     // equilibrium
     float vel_len = length(velocity);
@@ -110,11 +150,6 @@ void main() {
     for (int i = 0; i < 9; i++) {
         float d = dot(DIRS[i], velocity);
         equilibrium[i] = density * T_WEIGHTS[i] * (1.0 + d * 3.0 + 4.5 * d * d - 1.5 * vel_len * vel_len);
-    }
-    if (clm == 0) {
-        for (int i = 0; i < 3; i++) {
-            fin[i] = equilibrium[i] + fin[8 - i] - equilibrium[8 - i];
-        }
     }
 
     // collide
@@ -136,30 +171,7 @@ void main() {
 
     if (imageLoad(Obstacle, ivec2(clm, row)).x != 0) {
         imageStore(Screen, ivec2(clm, row), vec4(0.0, 1.0, 0.0, 1.0));
-    } else if (vel_len < 0.1) {
-        imageStore(Screen, ivec2(clm, row), from_hsv(vec4( 180.0 / 3.141 * acos(velocity.x / vel_len), 0.7, vel_len / 0.09, 1.0)));
     } else {
-        imageStore(Screen, ivec2(clm, row), vec4(0.0, 0.0, 1.0, 1.0));
+        imageStore(Screen, ivec2(clm, row), from_hsv(vec4( 180.0 / 3.141 * acos(velocity.x / vel_len), 0.7, vel_len / 0.09, 1.0)));
     }
-
-    memoryBarrier(); // wait for all to finish
-
-    if (clm != 0 && clm + 1 != size.x) {
-        for (int i = 0; i < 3; i++) {
-            for (int j = 0; j < 3; j++) {
-                int from_x = clm - DISCRETE_DIRS[i * 3 + j].x;
-                int from_y = row - DISCRETE_DIRS[i * 3 + j].y;
-                if (from_y == -1) {
-                    from_y = size.y - 1;
-                } else if (from_y == size.y) {
-                    from_y = 0;
-                }
-
-                fin[i * 3 + j] = imageLoad(Fout, ivec3(from_x, from_y, i))[j];
-            }
-        }
-    }
-    imageStore(Fin, ivec3(clm, row, 0), vec4(fin[0], fin[1], fin[2], 0.0));
-    imageStore(Fin, ivec3(clm, row, 1), vec4(fin[3], fin[4], fin[5], 0.0));
-    imageStore(Fin, ivec3(clm, row, 2), vec4(fin[6], fin[7], fin[8], 0.0)); 
 }

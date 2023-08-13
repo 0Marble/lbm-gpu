@@ -233,23 +233,24 @@ fn main() {
     gl_call!(gl::Uniform1i(screen_uniform, 0));
 
     gl_call!(gl::UseProgram(lbm_init_program));
-    gl_call!(gl::BindTextureUnit(0, screen_texture));
-    gl_call!(gl::BindTextureUnit(1, fin_texture));
-    gl_call!(gl::BindTextureUnit(2, fout_texture));
-    gl_call!(gl::BindTextureUnit(3, vel_texure));
-    gl_call!(gl::BindTextureUnit(4, initial_vel_texure));
-    gl_call!(gl::BindTextureUnit(5, obstacle_texture));
+    // gl_call!(gl::BindTextureUnit(0, screen_texture));
+    // gl_call!(gl::BindTextureUnit(1, fin_texture));
+    // gl_call!(gl::BindTextureUnit(2, fout_texture));
+    // gl_call!(gl::BindTextureUnit(3, vel_texure));
+    // gl_call!(gl::BindTextureUnit(4, initial_vel_texure));
+    // gl_call!(gl::BindTextureUnit(5, obstacle_texture));
     gl_call!(gl::DispatchCompute(width as u32 / 8, height as u32 / 8, 1));
     gl_call!(gl::MemoryBarrier(gl::ALL_BARRIER_BITS));
 
-    gl_call!(gl::UseProgram(lbm_step_program));
-    gl_call!(gl::BindTextureUnit(0, screen_texture));
-    gl_call!(gl::BindTextureUnit(1, fin_texture));
-    gl_call!(gl::BindTextureUnit(2, fout_texture));
-    gl_call!(gl::BindTextureUnit(3, vel_texure));
-    gl_call!(gl::BindTextureUnit(4, initial_vel_texure));
-    gl_call!(gl::BindTextureUnit(5, obstacle_texture));
+    // gl_call!(gl::UseProgram(lbm_step_program));
+    // gl_call!(gl::BindTextureUnit(0, screen_texture));
+    // gl_call!(gl::BindTextureUnit(1, fin_texture));
+    // gl_call!(gl::BindTextureUnit(2, fout_texture));
+    // gl_call!(gl::BindTextureUnit(3, vel_texure));
+    // gl_call!(gl::BindTextureUnit(4, initial_vel_texure));
+    // gl_call!(gl::BindTextureUnit(5, obstacle_texture));
 
+    let mut step = 0usize;
     'running: for _ in 0.. {
         for e in event_pump.poll_iter() {
             match e {
@@ -260,9 +261,6 @@ fn main() {
                 }
                 Event::KeyDown { keycode, .. } if keycode == Some(Keycode::Return) => {
                     //
-                    gl_call!(gl::UseProgram(lbm_step_program));
-                    gl_call!(gl::DispatchCompute(width as u32 / 8, height as u32 / 8, 1));
-                    gl_call!(gl::MemoryBarrier(gl::ALL_BARRIER_BITS));
                 }
                 Event::KeyDown { keycode, .. } if keycode == Some(Keycode::Tab) => {
                     //
@@ -272,6 +270,54 @@ fn main() {
         }
 
         gl_call!(gl::Clear(gl::COLOR_BUFFER_BIT));
+
+        for _ in 0..10 {
+            gl_call!(gl::UseProgram(lbm_step_program));
+            if step % 2 == 0 {
+                gl_call!(gl::BindImageTexture(
+                    1,
+                    fin_texture,
+                    0,
+                    gl::TRUE,
+                    0,
+                    gl::READ_ONLY,
+                    gl::RGBA32F
+                ));
+                gl_call!(gl::BindImageTexture(
+                    2,
+                    fout_texture,
+                    0,
+                    gl::TRUE,
+                    0,
+                    gl::WRITE_ONLY,
+                    gl::RGBA32F
+                ));
+            } else {
+                gl_call!(gl::BindImageTexture(
+                    1,
+                    fout_texture,
+                    0,
+                    gl::TRUE,
+                    0,
+                    gl::READ_ONLY,
+                    gl::RGBA32F
+                ));
+                gl_call!(gl::BindImageTexture(
+                    2,
+                    fin_texture,
+                    0,
+                    gl::TRUE,
+                    0,
+                    gl::WRITE_ONLY,
+                    gl::RGBA32F
+                ));
+            }
+
+            gl_call!(gl::DispatchCompute(width as u32 / 8, height as u32 / 8, 1));
+            gl_call!(gl::MemoryBarrier(gl::ALL_BARRIER_BITS));
+
+            step += 1;
+        }
 
         gl_call!(gl::UseProgram(draw_program));
         gl_call!(gl::BindVertexArray(vao));
